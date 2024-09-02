@@ -99,18 +99,26 @@ export default function MusicPlayer() {
   };
 
   const handleProgressChange = (newValue: number[]) => {
-    const duration = file?.duration();
-    const newTime = (newValue[0] / 100) * (duration ?? 0);
-    file?.seek(newTime);
-    setProgress(newValue[0]);
+    if (isPlaying) {
+      const duration = file?.duration();
+      const newTime = (newValue[0] / 100) * (duration ?? 0);
+      file?.seek(newTime);
+      setProgress(newValue[0]);
+    } else {
+      setProgress(0);
+    }
   };
 
   useEffect(() => {
     const interval = setInterval(() => {
-      const currentTime = file?.seek() as number;
-      const duration = file?.duration() as number;
-      const percentage = (currentTime / duration) * 100;
-      setProgress(percentage);
+      if (isPlaying) {
+        const currentTime = file?.seek() as number;
+        const duration = file?.duration() as number;
+        const percentage = (currentTime / duration) * 100;
+        setProgress(percentage);
+      } else {
+        clearInterval(interval);
+      }
     }, 1000); // Atualiza o progresso a cada segundo
 
     return () => clearInterval(interval);
