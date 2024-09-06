@@ -1,4 +1,14 @@
-import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import * as id3 from "id3js";
+
+import {
+  Pause,
+  Play,
+  SkipBack,
+  SkipForward,
+  StepBack,
+  StepForward,
+  StopCircle
+} from "lucide-react";
 import {
   Table,
   TableBody,
@@ -8,52 +18,57 @@ import {
   TableHeader,
   TableRow
 } from "./ui/table";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Button } from "./ui/button";
 import { Howl } from "howler";
+import { ID3Tag } from "id3js/lib/id3Tag";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { Slider } from "./ui/slider";
 
 export default function MusicPlayer() {
   const [progress, setProgress] = useState(0);
+  const [fileMetadata, setFileMetadata] = useState<ID3Tag & { name: string } | null>(null);
   const [file, setFile] = useState<Howl | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [files, setFiles] = useState<File[]>([]);
   const [selectedFileIndex, setSelectedFileIndex] = useState(0);
-  const [timer, setTimer] = useState<NodeJS.Timeout | null>(null);
 
   function onEndHandler() {
     setIsPlaying(false);
   }
 
-  function handleChange(event: React.ChangeEvent<HTMLInputElement>) {
+  async function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     // Convert FileList to an array of File objects
-    const fileList = event.target.files;
+    const fileList = e.target.files;
     const fileArray = Array.from(fileList as ArrayLike<File>);
 
     // Set file list
     setFiles(fileArray);
   }
 
-  const togglePlayPause = () => {
-    if (isPlaying) {
-      file?.stop();
+  const togglePlayPause = async (e: { preventDefault: () => void }) => {
+    e.preventDefault();
+
+    if (!file) {
+      setSelectedFileIndex(0);
+      const newFile = await setTheHowlByIndex(files, 0);
+      newFile.play();
+      setIsPlaying(true);
     } else {
-      file?.play();
+      if (progress >= 100) {
+        setProgress(0);
+      }
+
+      if (isPlaying) {
+        file?.stop();
+      } else {
+        file?.play();
+      }
     }
+
     setIsPlaying(!isPlaying);
-
-    if (timer) {
-      clearInterval(timer);
-    }
-
-    setTimer(
-      setInterval(() => {
-        setProgress(progress + 1);
-      }, 1000)
-    );
   };
 
   const setTheHowlByIndex = (
@@ -84,8 +99,15 @@ export default function MusicPlayer() {
               onend: onEndHandler
             });
 
-            setFile(newSound);
-            resolve(newSound);
+            id3.fromFile(currentFile).then((tags) => {
+              setFileMetadata({ name: currentFile.name, title: tags?.title ?? "", album: tags?.album ?? "", artist: tags?.artist ?? null, year: tags?.year ?? null });
+              setFile(newSound);
+              resolve(newSound);
+            }).catch((_err) => {
+              setFileMetadata({ name: currentFile.name, title: "", album: "", artist: "", year: "" });
+              setFile(newSound);
+              resolve(newSound);
+            });
           }
         };
 
@@ -98,15 +120,35 @@ export default function MusicPlayer() {
     });
   };
 
-  const handleProgressChange = (newValue: number[]) => {
-    if (isPlaying) {
-      const duration = file?.duration();
-      const newTime = (newValue[0] / 100) * (duration ?? 0);
-      file?.seek(newTime);
-      setProgress(newValue[0]);
-    } else {
-      setProgress(0);
+  const nextSong = async (e: React.MouseEvent | null) => {
+    if (files && files.length && selectedFileIndex + 1 < files.length) {
+      e?.preventDefault();
+      if (isPlaying) {
+        file?.stop();
+        setIsPlaying(false);
+        setProgress(0);
+      }
+
+      const newFile = await setTheHowlByIndex(
+        Array.from(files),
+        selectedFileIndex + 1
+      );
+
+      setSelectedFileIndex(selectedFileIndex + 1);
+
+      newFile.play();
+      setIsPlaying(true);
     }
+  };
+
+  const stepBackOnSound = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    file?.seek(file?.seek() - 5);
+  };
+
+  const stepForwardOnSound = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    file?.seek(file?.seek() + 5);
   };
 
   useEffect(() => {
@@ -114,15 +156,34 @@ export default function MusicPlayer() {
       if (isPlaying) {
         const currentTime = file?.seek() as number;
         const duration = file?.duration() as number;
-        const percentage = (currentTime / duration) * 100;
+        const percentage = Math.round(
+          (Math.ceil(currentTime) / duration) * 100
+        );
         setProgress(percentage);
-      } else {
-        clearInterval(interval);
       }
     }, 1000); // Atualiza o progresso a cada segundo
 
     return () => clearInterval(interval);
-  }, [file]);
+  }, [file, progress, isPlaying]);
+
+  useEffect(() => {
+    // Play the next song into the list
+    if (
+      files &&
+      files.length &&
+      progress >= 100 &&
+      selectedFileIndex + 1 < files.length
+    ) {
+      nextSong(null);
+    }
+  }, [progress, files, selectedFileIndex]);
+
+  useEffect(() => {
+    // Set the progress bar to 0 when the last file was played
+    if (progress >= 100 && selectedFileIndex + 1 >= files.length) {
+      setProgress(0);
+    }
+  }, [progress, files, selectedFileIndex]);
 
   return (
     <div>
@@ -130,44 +191,43 @@ export default function MusicPlayer() {
         <div className="space-y-4">
           <div className="text-center">
             <h2 className="text-2xl font-semibold text-primary">Now Playing</h2>
-            <p className="text-sm text-muted-foreground">Artist - Song Title</p>
+            <p className="text-sm text-muted-foreground">{fileMetadata?.artist} - {fileMetadata?.title} {fileMetadata?.year ? `(${fileMetadata.year})` : ""}</p>
+            <p className="text-sm text-muted-foreground">{fileMetadata?.name}</p>
           </div>
 
-          <Slider
-            value={[progress]}
-            max={100}
-            step={1}
-            onChange={(event: React.FormEvent<HTMLInputElement>) =>
-              handleProgressChange([
-                Number((event.currentTarget as HTMLInputElement).value)
-              ])
-            }
-          />
+          <Slider value={[progress]} max={100} step={1} />
 
           <div className="flex justify-center space-x-4">
-            <Button variant="outline" size="icon">
-              <SkipBack
-                className="h-4 w-4"
-                onClick={async () => {
-                  if (files && selectedFileIndex - 1 >= 0) {
-                    if (isPlaying) {
-                      file?.stop();
-                      setIsPlaying(!isPlaying);
-                      setProgress(0);
-                    }
+            <Button variant="outline" size="icon" onClick={stepBackOnSound}>
+              <StepBack className="h-4 w-4" />
+              <span className="sr-only">Step back</span>
+            </Button>
 
-                    const newFile = await setTheHowlByIndex(
-                      Array.from(files),
-                      selectedFileIndex - 1
-                    );
-
-                    setSelectedFileIndex(selectedFileIndex - 1);
-
-                    newFile.play();
-                    setIsPlaying(true);
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={async (e) => {
+                if (files && selectedFileIndex - 1 >= 0) {
+                  e.preventDefault();
+                  if (isPlaying) {
+                    file?.stop();
+                    setIsPlaying(false);
+                    setProgress(0);
                   }
-                }}
-              />
+
+                  const newFile = await setTheHowlByIndex(
+                    Array.from(files),
+                    selectedFileIndex - 1
+                  );
+
+                  setSelectedFileIndex(selectedFileIndex - 1);
+
+                  newFile.play();
+                  setIsPlaying(true);
+                }
+              }}
+            >
+              <SkipBack className="h-4 w-4" />
               <span className="sr-only">Previous track</span>
             </Button>
 
@@ -180,34 +240,34 @@ export default function MusicPlayer() {
               <span className="sr-only">{isPlaying ? "Pause" : "Play"}</span>
             </Button>
 
-            <Button variant="outline" size="icon">
-              <SkipForward
-                className="h-4 w-4"
-                onClick={async () => {
-                  if (
-                    files &&
-                    files.length &&
-                    selectedFileIndex + 1 < files.length
-                  ) {
-                    if (isPlaying) {
-                      file?.stop();
-                      setIsPlaying(false);
-                      setProgress(0);
-                    }
+            <Button variant="outline" size="icon" onClick={async (e) => {
+              e.preventDefault();
+              if (isPlaying) {
+                file?.stop();
+                setIsPlaying(false);
+                setProgress(0);
+                await setTheHowlByIndex(files, 0);
+                setSelectedFileIndex(0);
+              }
+            }}>
+              <StopCircle className="h-4 w-4" />
+              <span className="sr-only">Stop</span>
+            </Button>
 
-                    const newFile = await setTheHowlByIndex(
-                      Array.from(files),
-                      selectedFileIndex + 1
-                    );
-
-                    setSelectedFileIndex(selectedFileIndex + 1);
-
-                    newFile.play();
-                    setIsPlaying(true);
-                  }
-                }}
-              />
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={async (e) => {
+                nextSong(e);
+              }}
+            >
+              <SkipForward className="h-4 w-4" />
               <span className="sr-only">Next track</span>
+            </Button>
+
+            <Button variant="outline" size="icon" onClick={stepForwardOnSound}>
+              <StepForward className="h-4 w-4" />
+              <span className="sr-only">Step back</span>
             </Button>
           </div>
         </div>
@@ -224,9 +284,10 @@ export default function MusicPlayer() {
               className="w-full text-center"
               type="file"
               multiple
-              onChange={(event: React.ChangeEvent<HTMLInputElement>) => {
+              onChange={async (e: React.ChangeEvent<HTMLInputElement>) => {
+                e.preventDefault();
                 setProgress(0);
-                handleChange(event);
+                await handleChange(e);
               }}
             />
           </div>
@@ -250,11 +311,15 @@ export default function MusicPlayer() {
                     }`}
                     onClick={async (e) => {
                       e.preventDefault();
+
                       if (isPlaying) {
                         file?.stop();
                         setIsPlaying(false);
                         setProgress(0);
+                      } else {
+                        setProgress(0);
                       }
+
                       try {
                         setSelectedFileIndex(idx);
                         const newFile = await setTheHowlByIndex([item], 0);
